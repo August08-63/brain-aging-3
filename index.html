@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>소지 카운터</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #f9f9f9; }
+    canvas { display: block; margin: 0 auto; }
+    table { margin: 20px auto; border-collapse: collapse; }
+    td, th { border: 1px solid #ccc; padding: 8px 16px; }
+  </style>
+</head>
+<body>
+  <h1>소지 카운터 (60초 x 6회)</h1>
+  <video id="video" autoplay playsinline style="display:none;"></video>
+  <canvas id="canvas"></canvas>
+
+  <h2 id="timer">남은 시간: 60초</h2>
+  <button id="startBtn" onclick="startTest()">1회 측정 시작</button>
+  <button id="nextBtn" onclick="prepareNextRound()" style="display:none;">다음 측정</button>
+
+  <div id="resultTable"></div>
+
+  <script type="module">
+    import { Hands } from 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js';
+    import { Camera } from 'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js';
+    import { drawConnectors, drawLandmarks } from 'https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js';
+
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const resultTable = document.getElementById('resultTable');
+    const timerText = document.getElementById('timer');
+    const startBtn = document.getElementById('startBtn');
+    const nextBtn = document.getElementById('nextBtn');
+
+    let rightCount = 0, leftCount = 0;
+    let rightFolded = false, leftFolded = false;
+    let currentRound = 0;
+    const maxRounds = 6;
+    const allResults = [];
+    let timer = null;
+
+    const hands = new Hands({
+      locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    });
+
+    hands.onResults(onResults);
+
+    const camera = new Camera(video, {
+      onFrame: async () => await hands.send({ image: video }),
+      width: 640,
+      height: 480
+    });
+
+    camera.start();
+    canvas.width = 640;
+    canvas.height = 480;
+
+    function onResults(results) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
+
+      if (results.multiHandLandmarks && results.multiHandedness) {
+        for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+          const landmarks = results.multiHandLandmarks[i];
+          const handedness = results.multiHandedness[i].label;
+
+          drawConnectors(ctx, landmarks, Hands.HAND_CONNECTIONS, { color: '#00FF00' });
+          drawLandmarks(ctx, landmarks, { color: '#FF0000', radius: 3 });
+
+          const pinkyTip = landmarks[20];
+          const pinkyDip = landmarks[19];
+          const isFolded = pinkyTip.y > pinkyDip.y;
+
+          // MediaPipe는 거울 기준이므로 'Right' → 실제 왼손
+          if (handedness === 'Right') {
+            if (isFolded && !leftFolded) {
+              leftCount++;
+              leftFolded = true;
+            }
+            if (!isFolded) leftFolded = false;
+          } else if (handedness === 'Left') {
+            if (isFolded && !rightFolded) {
+              rightCount++;
+              rightFolded = true;
+            }
+            if (!isFolded) rightFolded = false;
+          }
+        }
+      }
+    }
+
+    function startTest() {
+      if (currentRound >= maxRounds) return;
+
+      rightCount = 0;
+      leftCount = 0;
+      let timeLeft = 60;
+      timerText.textContent = `남은 시간: ${timeLeft}초`;
+      startBtn.disabled = true;
+      nextBtn.style.display = 'none';
+
+      timer = setInterval(() => {
+        timeLeft--;
+        timerText.textContent = `남은 시간: ${timeLeft}초`;
+        if (timeLeft <= 0) {
+          clearInterval(timer);
+          endRound();
+        }
+      }, 1000);
+    }
+
+    function endRound() {
+      currentRound++;
+      allResults.push({ round: currentRound, right: rightCount, left: leftCount });
+
+      if (currentRound < maxRounds) {
+        startBtn.textContent = `${currentRound + 1}회 측정 시작`;
+        startBtn.disabled = true;
+        nextBtn.style.display = 'inline-block';
+        timerText.textContent = `${currentRound}회 완료! 다음 측정을 시작하세요.`;
+      } else {
+        startBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+        timerText.textContent = '모든 측정 완료!';
+        showResults();
+      }
+    }
+
+    function prepareNextRound() {
+      startBtn.disabled = false;
+      nextBtn.style.display = 'none';
+    }
+
+    function showResults() {
+      let html = `<table>
+        <tr><th>회차</th><th>오른손 소지</th><th>왼손 소지</th></tr>`;
+      let totalRight = 0, totalLeft = 0;
+
+      allResults.forEach(r => {
+        html += `<tr><td>${r.round}회</td><td>${r.right}번</td><td>${r.left}번</td></tr>`;
+        totalRight += r.right;
+        totalLeft += r.left;
+      });
+
+      const avgRight = (totalRight / maxRounds).toFixed(2);
+      const avgLeft = (totalLeft / maxRounds).toFixed(2);
+
+      html += `<tr><th>평균</th><th>${avgRight}번</th><th>${avgLeft}번</th></tr></table>`;
+      resultTable.innerHTML = html;
+    }
+  </script>
+</body>
+</html>
